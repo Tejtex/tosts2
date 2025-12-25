@@ -1,0 +1,1 @@
+this is tosts, a competetive programming tester written in rust
