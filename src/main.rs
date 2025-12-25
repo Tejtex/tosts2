@@ -10,8 +10,8 @@ use tracing::{error, info};
 use wait_timeout::ChildExt;
 
 #[derive(Parser)]
-#[command(name = "tyster")]
-struct Tyster {
+#[command(name = "tosts")]
+struct tosts {
     #[command(subcommand)]
     command: Commands,
 
@@ -51,6 +51,7 @@ fn run_on_test(file: &PathBuf, test: &str, timeout: Duration) -> Result<String, 
     let mut child = Command::new(file)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()
         .expect("Failed to start process");
 
@@ -122,7 +123,7 @@ fn test(
 fn main() {
     tracing_subscriber::fmt::init();
 
-    let args = Tyster::parse();
+    let args = tosts::parse();
     info!("STARTING TESTS");
 
     match args.command {
