@@ -2,6 +2,8 @@
 name = "tosts"
 version = "0.1.0"
 edition = "2024"
+description = "tosts"
+license="GPL-2"
 
 [dependencies]
 clap={version="4", features=["derive"]}
