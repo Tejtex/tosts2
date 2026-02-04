@@ -5,6 +5,9 @@ gen
 a.cpp
 b.cpp
 gen.cpp
+gen.exe
+a.exe
+b.exe
 test.in
 tosts
 .DS_Store
