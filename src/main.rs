@@ -24,7 +24,7 @@ struct Tosts {
     command: Commands,
 
 }
-use indicatif::{ProgressStyle, ProgressBar};
+use indicatif::{ProgressStyle, ProgressBar, ParallelProgressIterator};
 use rayon::prelude::*;
 
 #[derive(Subcommand, Clone)]
@@ -135,15 +135,15 @@ fn run_on_test(file: &PathBuf, test: &str, timeout: Duration) -> Result<String, 
 
 fn generate(in_dir: &PathBuf, out_dir: &PathBuf, solution: &PathBuf, generator: &PathBuf, in_ext: &String, out_ext: &String, number: u64) {
     info!("GENERATING {} TESTS", number);
-    let pb = Arc::new(Mutex::new(ProgressBar::new(number)));
-    pb.lock().unwrap().set_style(
+    let pb =ProgressBar::new(number);
+    pb.set_style(
         ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} ETA {eta}")
             .unwrap()
             .progress_chars("█▉▊▋▌▍▎▏ "),
     );
     fs::create_dir_all(out_dir).expect("couldn't create output directory");
     fs::create_dir_all(in_dir).expect("couldn't create solution directory");
-    (1..=number).into_par_iter().for_each(|i| {
+    (1..=number).into_par_iter().progress_with(pb).for_each(|i| {
         let test = gen_test(&generator);
         let infile = in_dir.join(format!("{i}.{in_ext}"));
         let outfile = out_dir.join(format!("{i}.{out_ext}"));
@@ -154,8 +154,6 @@ fn generate(in_dir: &PathBuf, out_dir: &PathBuf, solution: &PathBuf, generator: 
             .expect("solution shouldn't TLE");
 
         fs::write(&outfile, out).expect("couldn't write output file");
-        let pb = pb.lock().unwrap();
-        pb.inc(1);
     });
     info!("ALL TESTS GENERATED");
 
@@ -210,35 +208,31 @@ fn test(
     generator: PathBuf,
     num: u64,
 ) {
-    let pb = Arc::new(Mutex::new(ProgressBar::new(num)));
-    pb.lock().unwrap().set_style(
+    let pb = ProgressBar::new(num);
+    pb.set_style(
         ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} ETA {eta}")
             .unwrap()
             .progress_chars("█▉▊▋▌▍▎▏ "),
     );
     let mut stop = AtomicBool::new(false);
-    (1..=num).into_par_iter().for_each(|i| {
+    (1..=num).into_par_iter().progress_with(pb).for_each(|i| {
         if stop.load(Ordering::Relaxed) {
             return;
         }
 
         let test_input = gen_test(&generator);
         let verdict = compare(&sol1, &sol2, &*test_input, timeout);
-        let pb = pb.lock().unwrap();
         if &Verdict::TLE == &verdict {
             save_test(&*test_input, i);
-            pb.finish_and_clear();
             error!("TLE on test {i}");
             stop.store(true, Ordering::Relaxed);
         }
         if Verdict::WA == verdict {
             save_test(&*test_input, i);
-            pb.finish_and_clear();
             error!("WA on test {i}");
             stop.store(true, Ordering::Relaxed);
         }
 
-        pb.inc(1);
     });
 
     info!("ALL TESTS PASSED");
@@ -252,15 +246,15 @@ fn run_from_dir(in_dir: PathBuf, out_dir: PathBuf, in_ext: String, out_ext: Stri
 
     inputs.sort_by_key(|e| e.path());
 
-    let pb = Arc::new(Mutex::new(ProgressBar::new(inputs.len() as u64)));
-    pb.lock().unwrap().set_style(
+    let pb = ProgressBar::new(inputs.len() as u64);
+    pb.set_style(
         ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} ETA {eta}")
             .unwrap()
             .progress_chars("█▉▊▋▌▍▎▏ "),
     );
 
     let mut stop = AtomicBool::new(false);
-    inputs.par_iter().for_each(|input_file| {
+    inputs.par_iter().progress_with(pb).for_each(|input_file| {
 
         if stop.load(Ordering::Relaxed) {
             return;
@@ -290,8 +284,6 @@ fn run_from_dir(in_dir: PathBuf, out_dir: PathBuf, in_ext: String, out_ext: Stri
             save_test(&input, 0);
             stop.store(true, Ordering::Relaxed);
         }
-        let pb = pb.lock().unwrap();
-        pb.inc(1);
     });
 
     info!("ALL TESTS PASSED");

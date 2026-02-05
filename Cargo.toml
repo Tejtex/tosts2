@@ -1,6 +1,6 @@
 [package]
 name = "tosts"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "tosts"
 license="MIT"
@@ -12,5 +12,5 @@ tracing="0.1.44"
 rlimit="0.10.2"
 
 wait-timeout="0.2.1"
-indicatif = "0.18"
+indicatif = { version = "0.18", features = ["rayon"] }
 rayon = "1.11.0"
