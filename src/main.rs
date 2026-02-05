@@ -8,14 +8,9 @@ use std::{
     time::Duration,
     thread
 };
-use std::path::Path;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::AtomicBool;
 use clap::{Parser, Subcommand};
 use tracing::{error, info};
 use wait_timeout::ChildExt;
-use std::sync::atomic::Ordering;
-use clap::builder::TypedValueParser;
 
 #[derive(Parser)]
 #[command(name = "tosts")]
@@ -24,8 +19,7 @@ struct Tosts {
     command: Commands,
 
 }
-use indicatif::{ProgressStyle, ProgressBar, ParallelProgressIterator};
-use rayon::prelude::*;
+use indicatif::{ProgressStyle, ProgressBar, ProgressIterator};
 
 #[derive(Subcommand, Clone)]
 enum Commands {
@@ -55,10 +49,10 @@ enum Commands {
         #[arg(short, long)]
         out_dir: PathBuf,
         /// extension of input files
-        #[arg(alias="ie", long)]
+        #[arg(alias="ie", long, default_value = "in")]
         in_ext: String,
         /// extension of output files
-        #[arg(alias="oe", long)]
+        #[arg(alias="oe", long, default_value = "out")]
         out_ext: String,
 
         /// time limit (in centiseconds)
@@ -78,10 +72,10 @@ enum Commands {
         #[arg(short, long)]
         out_dir: PathBuf,
         /// extension of input files
-        #[arg(alias="ie", long)]
+        #[arg(alias="ie", long, default_value = "in")]
         in_ext: String,
         /// extension of output files
-        #[arg(alias="oe", long)]
+        #[arg(alias="oe", long, default_value = "out")]
         out_ext: String,
 
         /// number of tests
@@ -143,7 +137,7 @@ fn generate(in_dir: &PathBuf, out_dir: &PathBuf, solution: &PathBuf, generator: 
     );
     fs::create_dir_all(out_dir).expect("couldn't create output directory");
     fs::create_dir_all(in_dir).expect("couldn't create solution directory");
-    (1..=number).into_par_iter().progress_with(pb).for_each(|i| {
+    for i in (1..=number).progress_with(pb) {
         let test = gen_test(&generator);
         let infile = in_dir.join(format!("{i}.{in_ext}"));
         let outfile = out_dir.join(format!("{i}.{out_ext}"));
@@ -154,7 +148,7 @@ fn generate(in_dir: &PathBuf, out_dir: &PathBuf, solution: &PathBuf, generator: 
             .expect("solution shouldn't TLE");
 
         fs::write(&outfile, out).expect("couldn't write output file");
-    });
+    }
     info!("ALL TESTS GENERATED");
 
 }
@@ -214,26 +208,22 @@ fn test(
             .unwrap()
             .progress_chars("█▉▊▋▌▍▎▏ "),
     );
-    let mut stop = AtomicBool::new(false);
-    (1..=num).into_par_iter().progress_with(pb).for_each(|i| {
-        if stop.load(Ordering::Relaxed) {
-            return;
-        }
 
+    for i in 1..=num {
         let test_input = gen_test(&generator);
         let verdict = compare(&sol1, &sol2, &*test_input, timeout);
         if &Verdict::TLE == &verdict {
             save_test(&*test_input, i);
             error!("TLE on test {i}");
-            stop.store(true, Ordering::Relaxed);
+            break;
         }
         if Verdict::WA == verdict {
             save_test(&*test_input, i);
             error!("WA on test {i}");
-            stop.store(true, Ordering::Relaxed);
+            break;
         }
 
-    });
+    }
 
     info!("ALL TESTS PASSED");
 }
@@ -252,13 +242,8 @@ fn run_from_dir(in_dir: PathBuf, out_dir: PathBuf, in_ext: String, out_ext: Stri
             .unwrap()
             .progress_chars("█▉▊▋▌▍▎▏ "),
     );
+    for (i, input_file) in inputs.into_iter().progress_with(pb).enumerate() {
 
-    let mut stop = AtomicBool::new(false);
-    inputs.par_iter().progress_with(pb).for_each(|input_file| {
-
-        if stop.load(Ordering::Relaxed) {
-            return;
-        }
         let input = std::fs::read_to_string(input_file.path()).expect("Cannot read input");
         let output_file = out_dir.join(
             input_file.path().file_name().unwrap()
@@ -266,27 +251,24 @@ fn run_from_dir(in_dir: PathBuf, out_dir: PathBuf, in_ext: String, out_ext: Stri
 
         let expected = std::fs::read_to_string(output_file)
             .expect("Cannot read expected output");
+        let result = run_on_test(&solution, &input, timeout);
 
-        let result = run_on_test(&solution, &input, timeout).unwrap_or_else(|v| match v {
-            Verdict::TLE => {
-                error!("TLE on {}", input_file.path().display());
-                stop.store(true, Ordering::Relaxed);
-                "".to_string()
+        if let Err(Verdict::TLE) = result {
+            error!("TLE on {}", input_file.path().display());
+            save_test(&input, (i + 1) as u64);
+            break;
+        } else {
+            if (&result.unwrap()).trim_end_matches(&['\n','\r'][..]) != (&expected).trim_end_matches(&['\n','\r'][..]) {
+                error!("WA on {}", input_file.path().display());
+                save_test(&input, (i + 1) as u64);
+                break;
             }
-            _ => "".to_string(),
-        });
-        if stop.load(Ordering::Relaxed) {
-            return;
         }
 
-        if (&result).trim_end_matches(&['\n','\r'][..]) != (&expected).trim_end_matches(&['\n','\r'][..]) {
-            error!("WA on {}", input_file.path().display());
-            save_test(&input, 0);
-            stop.store(true, Ordering::Relaxed);
-        }
-    });
 
-    info!("ALL TESTS PASSED");
+    }
+    info!("ALL TESTS DONE");
+
 
 
 }
