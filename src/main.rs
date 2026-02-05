@@ -1,24 +1,31 @@
+
 use std::{
     fs::File,
+    fs,
     io::Write,
     path::PathBuf,
     process::{Command, Stdio},
     time::Duration,
     thread
 };
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicBool;
 use clap::{Parser, Subcommand};
 use tracing::{error, info};
 use wait_timeout::ChildExt;
+use std::sync::atomic::Ordering;
+use clap::builder::TypedValueParser;
 
 #[derive(Parser)]
 #[command(name = "tosts")]
-struct tosts {
+struct Tosts {
     #[command(subcommand)]
     command: Commands,
 
 }
 use indicatif::{ProgressStyle, ProgressBar};
-
+use rayon::prelude::*;
 
 #[derive(Subcommand, Clone)]
 enum Commands {
@@ -59,9 +66,36 @@ enum Commands {
         timelimit: u64,
 
         solution: PathBuf
+    },
+
+    /// generate tests with a generator and a solution
+    #[command(alias = "g")]
+    Generate {
+        /// directory with input files
+        #[arg(short, long)]
+        in_dir: PathBuf,
+        /// directory with output files
+        #[arg(short, long)]
+        out_dir: PathBuf,
+        /// extension of input files
+        #[arg(alias="ie", long)]
+        in_ext: String,
+        /// extension of output files
+        #[arg(alias="oe", long)]
+        out_ext: String,
+
+        /// number of tests
+        #[arg(short, long)]
+        number: u64,
+
+        generator: PathBuf,
+        solution: PathBuf,
+
+
     }
 }
-
+#[derive(Debug)]
+#[derive(PartialEq)]
 enum Verdict {
     OK,
     TLE,
@@ -97,6 +131,34 @@ fn run_on_test(file: &PathBuf, test: &str, timeout: Duration) -> Result<String, 
             Err(Verdict::TLE)
         }
     }
+}
+
+fn generate(in_dir: &PathBuf, out_dir: &PathBuf, solution: &PathBuf, generator: &PathBuf, in_ext: &String, out_ext: &String, number: u64) {
+    info!("GENERATING {} TESTS", number);
+    let pb = Arc::new(Mutex::new(ProgressBar::new(number)));
+    pb.lock().unwrap().set_style(
+        ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} ETA {eta}")
+            .unwrap()
+            .progress_chars("█▉▊▋▌▍▎▏ "),
+    );
+    fs::create_dir_all(out_dir).expect("couldn't create output directory");
+    fs::create_dir_all(in_dir).expect("couldn't create solution directory");
+    (1..=number).into_par_iter().for_each(|i| {
+        let test = gen_test(&generator);
+        let infile = in_dir.join(format!("{i}.{in_ext}"));
+        let outfile = out_dir.join(format!("{i}.{out_ext}"));
+
+        fs::write(&infile, &test).expect("couldn't write input file");
+
+        let out = run_on_test(&solution, &test, Duration::from_secs(100000))
+            .expect("solution shouldn't TLE");
+
+        fs::write(&outfile, out).expect("couldn't write output file");
+        let pb = pb.lock().unwrap();
+        pb.inc(1);
+    });
+    info!("ALL TESTS GENERATED");
+
 }
 
 fn compare(
@@ -148,39 +210,38 @@ fn test(
     generator: PathBuf,
     num: u64,
 ) {
-    let pb = ProgressBar::new(num);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{bar:40.cyan/blue} {pos}/{len} ETA {eta}"
-        )
+    let pb = Arc::new(Mutex::new(ProgressBar::new(num)));
+    pb.lock().unwrap().set_style(
+        ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} ETA {eta}")
             .unwrap()
             .progress_chars("█▉▊▋▌▍▎▏ "),
     );
-
-    for i in 1..=num {
-        let test_input = gen_test(&generator);
-        let verdict = compare(&sol1, &sol2, &test_input, timeout);
-
-        match verdict {
-            Verdict::OK => {
-                pb.inc(1);
-            }
-            Verdict::WA => {
-                pb.finish_and_clear();
-                error!("WA on test {}", i);
-                save_test(&test_input, i);
-                return;
-            }
-            Verdict::TLE => {
-                pb.finish_and_clear();
-                error!("TLE on test {}", i);
-                save_test(&test_input, i);
-                return;
-            }
+    let mut stop = AtomicBool::new(false);
+    (1..=num).into_par_iter().for_each(|i| {
+        if stop.load(Ordering::Relaxed) {
+            return;
         }
-    }
 
-    pb.finish_with_message("all tests passed");
+        let test_input = gen_test(&generator);
+        let verdict = compare(&sol1, &sol2, &*test_input, timeout);
+        let pb = pb.lock().unwrap();
+        if &Verdict::TLE == &verdict {
+            save_test(&*test_input, i);
+            pb.finish_and_clear();
+            error!("TLE on test {i}");
+            stop.store(true, Ordering::Relaxed);
+        }
+        if Verdict::WA == verdict {
+            save_test(&*test_input, i);
+            pb.finish_and_clear();
+            error!("WA on test {i}");
+            stop.store(true, Ordering::Relaxed);
+        }
+
+        pb.inc(1);
+    });
+
+    info!("ALL TESTS PASSED");
 }
 fn run_from_dir(in_dir: PathBuf, out_dir: PathBuf, in_ext: String, out_ext: String, solution: PathBuf, timeout: Duration) {
     let mut inputs = std::fs::read_dir(in_dir)
@@ -191,14 +252,19 @@ fn run_from_dir(in_dir: PathBuf, out_dir: PathBuf, in_ext: String, out_ext: Stri
 
     inputs.sort_by_key(|e| e.path());
 
-    let pb = ProgressBar::new(inputs.len() as u64);
-    pb.set_style(
+    let pb = Arc::new(Mutex::new(ProgressBar::new(inputs.len() as u64)));
+    pb.lock().unwrap().set_style(
         ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} ETA {eta}")
             .unwrap()
             .progress_chars("█▉▊▋▌▍▎▏ "),
     );
 
-    for input_file in inputs {
+    let mut stop = AtomicBool::new(false);
+    inputs.par_iter().for_each(|input_file| {
+
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
         let input = std::fs::read_to_string(input_file.path()).expect("Cannot read input");
         let output_file = out_dir.join(
             input_file.path().file_name().unwrap()
@@ -210,19 +276,26 @@ fn run_from_dir(in_dir: PathBuf, out_dir: PathBuf, in_ext: String, out_ext: Stri
         let result = run_on_test(&solution, &input, timeout).unwrap_or_else(|v| match v {
             Verdict::TLE => {
                 error!("TLE on {}", input_file.path().display());
+                stop.store(true, Ordering::Relaxed);
                 "".to_string()
             }
             _ => "".to_string(),
         });
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
 
         if (&result).trim_end_matches(&['\n','\r'][..]) != (&expected).trim_end_matches(&['\n','\r'][..]) {
             error!("WA on {}", input_file.path().display());
             save_test(&input, 0);
-            return;
+            stop.store(true, Ordering::Relaxed);
         }
-
+        let pb = pb.lock().unwrap();
         pb.inc(1);
-    }
+    });
+
+    info!("ALL TESTS PASSED");
+
 
 }
 
@@ -235,8 +308,8 @@ fn save_test(test: &str, i: u64) {
 fn main() {
     tracing_subscriber::fmt::init();
 
-    let args = tosts::parse();
-    info!("STARTING TESTS");
+    let args = Tosts::parse();
+    info!("STARTING");
 
     match args.command {
         Commands::Stress { generator, solution1, solution2, number, timelimit } => {
@@ -251,6 +324,9 @@ fn main() {
         Commands::Run { in_dir, out_dir, in_ext, out_ext, solution, timelimit } => {
             
             run_from_dir(in_dir, out_dir, in_ext, out_ext, solution, Duration::from_millis(timelimit * 10))
+        },
+        Commands::Generate {in_dir, out_dir, in_ext, out_ext, solution, generator, number} => {
+            generate(&in_dir, &out_dir, &solution, &generator, &in_ext, &out_ext, number)
         }
         
     }
