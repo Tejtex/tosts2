@@ -1,16 +1,15 @@
 [package]
 name = "tosts"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2024"
 description = "tosts"
 license="MIT"
 
 [dependencies]
 clap={version="4", features=["derive"]}
-tracing-subscriber="0.3.22"
-tracing="0.1.44"
-rlimit="0.10.2"
-
 wait-timeout="0.2.1"
 indicatif = { version = "0.18", features = ["rayon"] }
 rayon = "1.11.0"
+owo-colors="4.3.0"
+anyhow="1.0.102"
+colored="3.1.1"
